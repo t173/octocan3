@@ -135,7 +135,8 @@ int main(void) {
 	/* USER CODE BEGIN 2 */
 	printf("Initialized\r\n");
 	dac_write(0);
-	HAL_GPIO_WritePin(Sensor_SD_GPIO_Port, Sensor_SD_Pin, GPIO_PIN_RESET);
+	//Sensor_SD GPIO Port SET To HIGH
+	HAL_GPIO_WritePin(Sensor_SD_GPIO_Port, Sensor_SD_Pin, GPIO_PIN_SET);
 	/* USER CODE END 2 */
 
 	// Infinite loop //
