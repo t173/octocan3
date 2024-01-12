@@ -18,21 +18,20 @@
 
 
 /* USER CODE END Header */
-// Includes //
+/* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
-// Private includes //
+/* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "string.h"
-#include "uart_parser.h"
 /* USER CODE END Includes */
 
-// Private typedef //
+/* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 /* USER CODE END PTD */
 
-// Private define //
+/* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define true 1
 #define false 0
@@ -43,52 +42,39 @@
 #define DAC_CONFIG_BITS 0b0101							// DAC'a configuration bits(DACa:Buffered:2x:PowerDown)
 /* USER CODE END PD */
 
-// Private macro //
+/* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 /* USER CODE END PM */
 
-// Private variables //
+/* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef hlpuart1;
 SPI_HandleTypeDef hspi2;
 SPI_HandleTypeDef hspi3;
 TIM_HandleTypeDef htim6;
 
 /* USER CODE BEGIN PV */
-uart_parser_TypeDef hparser = {
-        .huart = &hlpuart1,
-        .write = 0,
-        .read = 0,
-        .ready = 0,
-        .Commands[0] = {"CAL"}, 						// Calibration command
-        .Commands[1] = {"LOG"}, 						// Log ADC command
-        .Commands[2] = {"INR"}, 						// Increment DAC command
-        .Commands[3] = {"MUX"}, 						// Select MUX command
-        .Commands[4] = {"STOP"}, 						// Stop command
-};
-enum States {sCALIB, sLOG, sINCR, sMUX, sSTOP};
-
+enum States {sCALIB = 'C', sLOG = 'L', sINCR = 'I',		// Command States
+sMUX = 'M', sSTOP = 'S', sSetup = 'E', sRaw = 'X'};
 uint16_t sen_dac[16]; 			  						// Sensors calibrated DAC value
 uint16_t cal_dac;										// Calibrated DAC value
 /* USER CODE END PV */
 
-// Private function prototypes //
+/* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_SPI3_Init(void);
 static void MX_TIM6_Init(void);
-
 /* USER CODE BEGIN PFP */
-uint16_t mux_func(uint16_t n, uint8_t parse_en);		// MUX selector function
+uint16_t mux_func(uint16_t n);							// MUX selector function
 void calibrate(); 										// Calibration function
 uint16_t get_adc(); 									// Get ADC function
 void dac_write(uint16_t value); 						// Sets DAC function
-uint16_t number_parser(uint16_t current_value);			// Number parser function
 void log_adc(uint8_t data);								// Logs ADC function
 /* USER CODE END PFP */
 
-// Private user code //
+/* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 /* With GCC/RAISONANCE, small printf (option LD Linker->Libraries->Small printf
  set to 'Yes') calls __io_putchar() */
@@ -99,122 +85,116 @@ void log_adc(uint8_t data);								// Logs ADC function
 #endif
 /* USER CODE END 0 */
 
-
-
 /**
- * @brief  The application entry point.
- * @retval int
- */
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void) {
-
-	/* USER CODE BEGIN 1 */
-	uint8_t i,ret;
-	uint8_t raw = 0;
+  /* USER CODE BEGIN 1 */
+	uint8_t i,log;
 	uint16_t dac_increment = 0;
 	uint8_t log_en = false;
-	/* USER CODE END 1 */
+  /* USER CODE END 1 */
 
-	// MCU Configuration //
-	HAL_Init(); 			// Reset of all peripherals, Initializes the Flash interface and the Systick
+  /* MCU Configuration--------------------------------------------------------*/
 
-	/* USER CODE BEGIN Init */
-	/* USER CODE END Init */
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
 
-	// Configure the system clock //
-	SystemClock_Config();
-	/* USER CODE BEGIN SysInit */
-	/* USER CODE END SysInit */
+  /* USER CODE BEGIN Init */
+  /* USER CODE END Init */
 
-	// Initialize all configured peripherals //
-	MX_GPIO_Init();
-	MX_LPUART1_UART_Init();
-	MX_SPI2_Init();
-	MX_SPI3_Init();
-	MX_TIM6_Init();
+  /* Configure the system clock */
+  SystemClock_Config();
 
-	/* USER CODE BEGIN 2 */
-	printf("Initialized\r\n");
-	dac_write(0);
+  /* USER CODE BEGIN SysInit */
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_LPUART1_UART_Init();
+  MX_SPI2_Init();
+  MX_SPI3_Init();
+  MX_TIM6_Init();
+  /* USER CODE BEGIN 2 */
+	puts("Initialized");
+	dac_write(0); // Sets DAC
 	//Sensor_SD GPIO Port SET To HIGH
 	HAL_GPIO_WritePin(Sensor_SD_GPIO_Port, Sensor_SD_Pin, GPIO_PIN_SET);
-	/* USER CODE END 2 */
+  /* USER CODE END 2 */
 
-	// Infinite loop //
-	/* USER CODE BEGIN WHILE */
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
 	while (1) {
-	ret = ring_add(&hparser); 				 // Fetch characters from UART and handle error codes
-	if(ret != 0) {  			 			// Ring buffer size error handling.
-		if(ret == 1) {
-			printf("Ring buffer full before write.\r\n");
-			ring_clear_index(&hparser);
+		char command = 0;
+		if(READ_BIT(hlpuart1.Instance->ISR, USART_ISR_RXNE_RXFNE) != 0 ) {
+					command = (char)hlpuart1.Instance->RDR;
 		}
-		else if(ret == 2) {
-			printf("\r\nRing buffer over flown during writing.\r\n");
-			ring_clear_index(&hparser);
-		}
-	}
-	else {                       			// Ring buffer receiving success.
-		if(hparser.ready == 1) {   			// Complete command received, denoted by received a '\r'.
-			switch(parser(&hparser)) {      // Parse the received commands against the defined commands.
-			// Start Calibration //
-				case sCALIB:
-					printf("Calibrating\r\n");
-					for(i=0; i<NUMBER_OF_SENSORS; i++) {
-						mux_func(i, false);
-						calibrate();
-						sen_dac[i] = cal_dac;
-						printf("cDAC: %hu\r\n", sen_dac[i]);
-						printf("Sensor: %hu Success\r\n", i);
-					}
-					break;
-			// Logs ADC Values //
-				case sLOG:
-					printf("Logging\r\n");
-					raw = number_parser(raw);
-					log_en = true;
-					break;
-			// Set DAC Increment Value //
-				case sINCR:
-					dac_increment = number_parser(dac_increment);
-					//printf("dac_increment: %hu\r\n", dac_increment);
-					//dac_write(dac_increment);
-					//test();
-					break;
-			// Select MUX (1-16) //
-				case sMUX:
-					i = mux_func(17, true);
-					printf("Selected MUX: %hu\r\n", i);
-					break;
-			// Stops Logging ADC //
-				case sSTOP:
-					printf("STOPPING\r\n");
-					log_en = false;
-					break;
-				default:
-					printf("Command Undefined.\r\n");
-					for(i=0;i<RING_BUFF_SIZE;i++)
-						printf("%d:%c ",i,hparser.ring[i]);
-					printf("\r\n");
-					printf("length,read,write:%d,%d,%d\r\n\n",hparser.length,hparser.read,hparser.write);
-					ring_clear_index(&hparser);
-					break;
-			}
-			hparser.ready = 0;
-		}
-	}
+		//Receive command
+		switch(command) {
 
-	if (log_en) { log_adc(raw); }
+		// Start Calibration //
+			case sCALIB:
+				printf("Calibrating\r\n");
+				for(i=0; i<NUMBER_OF_SENSORS; i++) {
+					mux_func(i);
+					calibrate();
+					sen_dac[i] = cal_dac;
+					printf("cDAC: %hu\r\n", sen_dac[i]);
+					printf("Sensor: %hu Success\r\n", i);
+				}
+				break;
+
+		// Logs ADC Values //
+			case sLOG:
+				printf("Logging\r\n");
+				log = 1;
+				log_en = true;
+				break;
+
+		// Set DAC Increment Value //
+			case sINCR:
+				dac_increment += 1;
+				printf("DAC Increment is: %hu \r\n", dac_increment);
+				break;
+
+		// Select MUX (1-16) //
+			case sMUX:
+				printf("Mux\r\n");
+				mux_func(1);
+				break;
+
+		// Stops Logging ADC //
+			case sSTOP:
+				printf("STOPPING\r\n");
+				log_en = false;
+				break;
+
+		// Set up Firmware  //
+			case sSetup:
+				printf("Setup\r\n");
+				break;
+
+		// Log raw data	 	//
+			case sRaw:
+				printf("Logging\r\n");
+				log = 2;
+				log_en = true;
+
+		//   Default 		//
+			default:
+				break;
+		}
+
+
+	if (log_en) { log_adc(log); }
 	HAL_Delay(1);
-	/* USER CODE END WHILE */
-
-	/* USER CODE BEGIN 3 */
+    /* USER CODE END WHILE */
 	}
-	/* USER CODE END 3 */
+    /* USER CODE BEGIN 3 */
 }
+  /* USER CODE END 3 */
 
-
-
-// System Generated Code //
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -445,14 +425,16 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, Sensor_SD_Pin|SPI2_CS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Sensor_SD_GPIO_Port, Sensor_SD_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LDAC_Pin|A3_Pin|LD2_Pin|MUX_EN_Pin
-                          |INA_SD_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LDAC_Pin|A3_Pin|LD2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, A0_Pin|A1_Pin|A2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, MUX_EN_Pin|A0_Pin|A1_Pin|A2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SPI3_CS_GPIO_Port, SPI3_CS_Pin, GPIO_PIN_RESET);
@@ -470,21 +452,35 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LDAC_Pin A3_Pin LD2_Pin MUX_EN_Pin
-                           INA_SD_Pin */
-  GPIO_InitStruct.Pin = LDAC_Pin|A3_Pin|LD2_Pin|MUX_EN_Pin
-                          |INA_SD_Pin;
+  /*Configure GPIO pins : LDAC_Pin A3_Pin LD2_Pin */
+  GPIO_InitStruct.Pin = LDAC_Pin|A3_Pin|LD2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : A0_Pin A1_Pin A2_Pin */
-  GPIO_InitStruct.Pin = A0_Pin|A1_Pin|A2_Pin;
+  /*Configure GPIO pin : PC5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF7_USART1;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : MUX_EN_Pin A0_Pin A1_Pin A2_Pin */
+  GPIO_InitStruct.Pin = MUX_EN_Pin|A0_Pin|A1_Pin|A2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PA8 PA9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF7_USART1;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SPI3_CS_Pin */
   GPIO_InitStruct.Pin = SPI3_CS_Pin;
@@ -500,8 +496,6 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
 }
-
-
 
 /* USER CODE BEGIN 4 */
 /**
@@ -520,36 +514,6 @@ return ch;
 
 
 
-/**
- * @brief Update the DAC Increment Value
- * @param uint16_t current_value
- * @retval Increment Value
- */
-uint16_t number_parser(uint16_t current_value) {
-
-    uint16_t temp = 0;
-    if(hparser.length > 1) {
-        while(hparser.length > 1) {
-            // In case of received a number //
-            if(hparser.ring[hparser.read]>= 0x30 && hparser.ring[hparser.read] <= 0x39) {
-                temp = temp * 10 + (hparser.ring[hparser.read] - 0x30);
-                INCREMENT(hparser.read);DECREMENT(hparser.length);
-            }
-            else {
-                printf("command syntax error.\r\n");
-                ring_clear_index(&hparser);
-                return current_value;
-            }
-        }
-    }
-    else {
-    	printf("command empty.\r\n");
-        ring_clear_index(&hparser);
-        return current_value;
-    }
-    ring_clear_index(&hparser);
-    return temp;
-}
 
 
 /**
@@ -557,23 +521,18 @@ uint16_t number_parser(uint16_t current_value) {
  * @param uint8_t n, uint8_t val
  * @retval 2 if failed, 0 if completed
  */
-uint16_t mux_func(uint16_t n, uint8_t parse_en) {
+uint16_t mux_func(uint16_t n) {
 
 	HAL_GPIO_WritePin(MUX_EN_GPIO_Port, MUX_EN_Pin, GPIO_PIN_SET);
-	if(parse_en) {
-		n = number_parser(n);
-		n--;
-	}
 
     if(n>=0 && n<=15) {
-    	HAL_GPIO_WritePin(A0_GPIO_Port, A0_Pin, ((n&1) == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    	n = n >> 1;
-    	HAL_GPIO_WritePin(A1_GPIO_Port, A1_Pin, ((n&1) == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    	n = n >> 1;
-    	HAL_GPIO_WritePin(A2_GPIO_Port, A2_Pin, ((n&1) == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    	n = n >> 1;
-    	HAL_GPIO_WritePin(A3_GPIO_Port, A3_Pin, ((n&1) == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-
+    	HAL_GPIO_WritePin(A0_GPIO_Port, A0_Pin, n&1);
+    	n >>= 1;
+    	HAL_GPIO_WritePin(A1_GPIO_Port, A1_Pin, n&1);
+    	n >>= 1;
+    	HAL_GPIO_WritePin(A2_GPIO_Port, A2_Pin, n&1);
+    	n >>= 1;
+    	HAL_GPIO_WritePin(A3_GPIO_Port, A3_Pin, n&1);
     }
     else {
         /* Out of Bounds */
@@ -582,13 +541,6 @@ uint16_t mux_func(uint16_t n, uint8_t parse_en) {
     return 0;
 }
 
-
-void test() {
-	while (1) {
-		dac_write(0);
-		dac_write(4095);
-	}
-}
 
 
 /**
@@ -625,13 +577,12 @@ void calibrate() {
 	uint16_t lower_bound = TARGET - 250;			// lower bounds of target
 	uint8_t flag = 0;								// flags 1 if ADC > UB, 0 if ADC < LB
 	uint8_t i = 0;									// number of iterations
-    uint16_t val_adc[25]; 							// current ADC value
-    uint16_t val_dac[25]; 							// current DAC value
-    uint16_t incr_dac[25]; 							// current DAC increment
-    int16_t error; 									// distance from target
+    uint16_t val_adc[32]; 							// current ADC value
+    uint16_t val_dac[32]; 							// current DAC value
+    uint16_t incr_dac[32]; 							// current DAC increment
 
     // sets indexes to 0 //
-    for (int i = 0; i < 25; i++) {
+    for (int i = 0; i < 32; i++) {
     	val_adc[i] = 0;
     	val_dac[i] = 0;
     	incr_dac[i] = 0;
@@ -657,7 +608,7 @@ void calibrate() {
 
     	// Iteration (1 to 25) //
         i = i + 1;
-        if (i >= 25) {
+        if (i >= 32) {
         	break;
         }
 
@@ -688,14 +639,12 @@ void calibrate() {
         val_adc[i] = get_adc();
     }
 
-	// calculate margin of error //
 	HAL_Delay(1);
-	error = TARGET - val_adc[i-1];
 
 	// Print status //
 	printf("Completed in %d steps\r\n", i-1);
 	printf("ADC: %d\r\n", val_adc[i-1]);
-	printf("MOE: %d from target\r\n", error);
+	printf("MOE: %d from target\r\n", TARGET - val_adc[i-1]);
 	cal_dac = val_dac[i-1];
 }
 
@@ -709,16 +658,13 @@ void calibrate() {
 uint16_t get_adc() {
 
 	uint8_t adc_value[2];
-	uint16_t ret;
 	// Start ADC conversion by toggling CNVST pin //
 	HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_SET);
 	delay_us(10);
 	HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_RESET);
-	HAL_SPI_Receive(&hspi2, &adc_value[0], 2, HAL_MAX_DELAY);
-	ret = adc_value[0];
-	ret = (ret << 8) | adc_value[1];
+	HAL_SPI_Receive(&hspi2, adc_value, 2, HAL_MAX_DELAY);
 
-	return ret;
+	return (adc_value[0] << 8) | adc_value[1];
 }
 
 
@@ -729,16 +675,12 @@ uint16_t get_adc() {
  * @retval None
  */
 void log_adc(uint8_t data) {
-
-	uint32_t cur_adc; 							// Current channel ADC
-	uint8_t address[5];							// Data address for visualizer
-
 		for (int i = 0; i < NUMBER_OF_SENSORS; i++) {
-		        mux_func(i, false);
+		        mux_func(i);
 		        delay_us(10);
 		        dac_write(sen_dac[i]); // 1us to write
 		        delay_us(26);			// 26us for adc to update
-		        cur_adc = get_adc(); //10us
+		        uint32_t cur_adc = get_adc(); // 10us
 
 		        // Average of values //
 		        for (int i = 0; i < 10; i++){
@@ -747,26 +689,23 @@ void log_adc(uint8_t data) {
 		        cur_adc = cur_adc/10;
 
 
-		        //if (data == 0) {
-		        //	printf("S%d %lu,", i, cur_adc);
-		        //}
-		        //else if(data == 1) {
+		        if (data == 1) {
+		        	printf("S%d:%lu, \r\n", i, cur_adc);
+		        }
+		        else if(data == 2) {
 		        	// Address format //
-		        	address[0] = 0x55; 					// Start of address
-					address[1] = 0x10 + i; 				// Selected MUX and channel
-					address[2] = 0x00; 				// Padding
-					address[3] = (cur_adc>>8) & 0xFF; 			// MSB
-					address[4] = cur_adc & 0xFF;		// LSB
+		        	uint8_t address[5] = { // Data address for visualizer
+		        			0x55, 					// Start of address
+							0x10 + i, // Selected MUX and channel
+							0x00, 				// Padding
+							(cur_adc>>8) & 0xFF, 			// MSB
+							cur_adc & 0xFF		// LSB
+		        	};
 
 					// Transmit address //
-					//for (int i = 0; i < 5; i++) {
-					//	//HAL MAX DELAY 1.8ms???
-					//	HAL_UART_Transmit(&hlpuart1, (uint8_t *)&address[i], 1, HAL_MAX_DELAY);
-					//}
 					HAL_UART_Transmit(&hlpuart1, address, 5, HAL_MAX_DELAY);
-		        //}
+		        }
 		    }
-		printf("\r\n");
 	}
 
 
@@ -780,7 +719,7 @@ void dac_write(uint16_t value) {
 
 	value = (DAC_CONFIG_BITS << 12) | value;
 	HAL_GPIO_WritePin(SPI3_CS_GPIO_Port, SPI3_CS_Pin, GPIO_PIN_RESET);
-	HAL_SPI_Transmit(&hspi3, (uint8_t *)&value, 1, HAL_MAX_DELAY);
+	HAL_SPI_Transmit(&hspi3, (uint8_t *)&value, 2, HAL_MAX_DELAY);
 	HAL_GPIO_WritePin(SPI3_CS_GPIO_Port, SPI3_CS_Pin, GPIO_PIN_SET);
 }
 /* USER CODE END 4 */
