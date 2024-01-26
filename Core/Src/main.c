@@ -53,8 +53,8 @@ SPI_HandleTypeDef hspi3;
 TIM_HandleTypeDef htim6;
 
 /* USER CODE BEGIN PV */
-enum States {sCALIB = 'C', sLOG = 'L', sINCR = 'I',		// Command States
-sMUX = 'M', sSTOP = 'S', sSetup = 'E', sRaw = 'X'};
+enum States {sCALIB = 'C', sLOG = 'L', sTest = 'T',		// Command States
+sSTOP = 'S', sSetup = 'E', sRaw = 'X'};
 uint16_t sen_dac[16]; 			  						// Sensors calibrated DAC value
 uint16_t cal_dac;										// Calibrated DAC value
 /* USER CODE END PV */
@@ -70,8 +70,8 @@ static void MX_TIM6_Init(void);
 uint16_t mux_func(uint16_t n);							// MUX selector function
 void calibrate(); 										// Calibration function
 uint16_t get_adc(); 									// Get ADC function
-void dac_write(uint16_t value); 						// Sets DAC function
-void log_adc(uint8_t data);								// Logs ADC function
+void dac_write(uint16_t value); 						// Set DAC function
+void log_adc(uint8_t data);								// Log ADC function
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -92,7 +92,7 @@ void log_adc(uint8_t data);								// Logs ADC function
 int main(void) {
   /* USER CODE BEGIN 1 */
 	uint8_t i,log;
-	uint16_t dac_increment = 0;
+	//uint16_t dac_increment = 0;
 	uint8_t log_en = false;
   /* USER CODE END 1 */
 
@@ -130,7 +130,7 @@ int main(void) {
 		if(READ_BIT(hlpuart1.Instance->ISR, USART_ISR_RXNE_RXFNE) != 0 ) {
 					command = (char)hlpuart1.Instance->RDR;
 		}
-		//Receive command
+		// Receives Command //
 		switch(command) {
 
 		// Start Calibration //
@@ -138,6 +138,7 @@ int main(void) {
 				printf("Calibrating\r\n");
 				for(i=0; i<NUMBER_OF_SENSORS; i++) {
 					mux_func(i);
+					HAL_Delay(1);
 					calibrate();
 					sen_dac[i] = cal_dac;
 					printf("cDAC: %hu\r\n", sen_dac[i]);
@@ -145,47 +146,61 @@ int main(void) {
 				}
 				break;
 
-		// Logs ADC Values //
+		// Logs ADC in ASCII //
 			case sLOG:
 				printf("Logging\r\n");
 				log = 1;
 				log_en = true;
 				break;
 
-		// Set DAC Increment Value //
-			case sINCR:
-				dac_increment += 1;
-				printf("DAC Increment is: %hu \r\n", dac_increment);
-				break;
+		// Tests DAC //
+			case sTest:
+				for(;;){
+					dac_write(0);
+					HAL_Delay(1);
+					dac_write(4095);
+					HAL_Delay(1);
+				}
 
-		// Select MUX (1-16) //
-			case sMUX:
-				printf("Mux\r\n");
-				mux_func(1);
-				break;
-
-		// Stops Logging ADC //
+		// Stops Logging //
 			case sSTOP:
 				printf("STOPPING\r\n");
 				log_en = false;
 				break;
 
-		// Set up Firmware  //
+		// Set up Firmware //
 			case sSetup:
+				// Initialization
 				printf("Setup\r\n");
+				mux_func(1);
+				HAL_Delay(1);
+				// Calibration
+				printf("Calibrating\r\n");
+				for(i=0; i<NUMBER_OF_SENSORS; i++) {
+					mux_func(i);
+					HAL_Delay(1);
+					calibrate();
+					sen_dac[i] = cal_dac;
+					printf("cDAC: %hu\r\n", sen_dac[i]);
+					printf("Sensor: %hu Success\r\n", i);
+				}
+				// Logging
+				HAL_Delay(1);
+				printf("Logging\r\n");
+				log = 1;
+				log_en = true;
 				break;
 
-		// Log raw data	 	//
+		// Logs ADC in raw //
 			case sRaw:
 				printf("Logging\r\n");
 				log = 2;
 				log_en = true;
 
-		//   Default 		//
+		// Default //
 			default:
 				break;
 		}
-
 
 	if (log_en) { log_adc(log); }
 	HAL_Delay(1);
@@ -517,8 +532,8 @@ return ch;
 
 
 /**
- * @brief Selects Output from MUX
- * @param uint8_t n, uint8_t val
+ * @brief Selects channel from MUX
+ * @param uint8_t n
  * @retval 2 if failed, 0 if completed
  */
 uint16_t mux_func(uint16_t n) {
@@ -559,7 +574,7 @@ void delay_us(uint16_t t) {
 	// Busy checking the counter
 	while(TIM6->CNT < t);
 
-	// Stop the timer
+	// Stop timer
 	CLEAR_BIT(TIM6->CR1, TIM_CR1_CEN);
 }
 
@@ -573,26 +588,26 @@ void delay_us(uint16_t t) {
 void calibrate() {
 
 	// Variables //
-	uint16_t upper_bound = TARGET + 250;			// upper bounds of target
-	uint16_t lower_bound = TARGET - 250;			// lower bounds of target
+	uint16_t upper_bound = TARGET + 500;			// upper bounds of target
+	uint16_t lower_bound = TARGET - 500;			// lower bounds of target
 	uint8_t flag = 0;								// flags 1 if ADC > UB, 0 if ADC < LB
 	uint8_t i = 0;									// number of iterations
-    uint16_t val_adc[32]; 							// current ADC value
-    uint16_t val_dac[32]; 							// current DAC value
-    uint16_t incr_dac[32]; 							// current DAC increment
+    uint16_t val_adc[25]; 							// current ADC value
+    uint16_t val_dac[25]; 							// current DAC value
+    uint16_t incr_dac[25]; 							// current DAC increment
 
     // sets indexes to 0 //
-    for (int i = 0; i < 32; i++) {
-    	val_adc[i] = 0;
-    	val_dac[i] = 0;
-    	incr_dac[i] = 0;
+    for (int j = 0; j < 25; j++) {
+    	val_adc[j] = 0;
+    	val_dac[j] = 0;
+    	incr_dac[j] = 0;
     }
 
     // First Iteration (i = 0) //
     incr_dac[i] = 4096;
     val_dac[i] = 0;
     dac_write(val_dac[i]);
-    delay_us(26);
+    delay_us(30);
     val_adc[i] = get_adc();
 
     // flags initial value //
@@ -608,7 +623,7 @@ void calibrate() {
 
     	// Iteration (1 to 25) //
         i = i + 1;
-        if (i >= 32) {
+        if (i > 25) {
         	break;
         }
 
@@ -635,7 +650,7 @@ void calibrate() {
 
         // Update ADC value //
         dac_write(val_dac[i]);
-        delay_us(26);
+        delay_us(30);
         val_adc[i] = get_adc();
     }
 
@@ -660,7 +675,7 @@ uint16_t get_adc() {
 	uint8_t adc_value[2];
 	// Start ADC conversion by toggling CNVST pin //
 	HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_SET);
-	delay_us(10);
+	HAL_Delay(1);
 	HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_RESET);
 	HAL_SPI_Receive(&hspi2, adc_value, 2, HAL_MAX_DELAY);
 
@@ -677,35 +692,37 @@ uint16_t get_adc() {
 void log_adc(uint8_t data) {
 		for (int i = 0; i < NUMBER_OF_SENSORS; i++) {
 		        mux_func(i);
-		        delay_us(10);
-		        dac_write(sen_dac[i]); // 1us to write
-		        delay_us(26);			// 26us for adc to update
-		        uint32_t cur_adc = get_adc(); // 10us
+		        HAL_Delay(1);
+		        dac_write(sen_dac[i]);
+		        delay_us(30);
+		        uint32_t cur_adc = get_adc();
 
-		        // Average of values //
-		        for (int i = 0; i < 10; i++){
-		        	cur_adc = cur_adc + get_adc();
-		        }
-		        cur_adc = cur_adc/10;
-
-
+		        // Logs ADC in ASCII //
 		        if (data == 1) {
-		        	printf("S%d:%lu, \r\n", i, cur_adc);
+		        	printf("S%d:", i);
+		        	printf("%lu", cur_adc);
+		        	printf(",");
+		        	HAL_Delay(1);
 		        }
+
+		        // Logs ADC in RAW //
 		        else if(data == 2) {
 		        	// Address format //
-		        	uint8_t address[5] = { // Data address for visualizer
-		        			0x55, 					// Start of address
-							0x10 + i, // Selected MUX and channel
-							0x00, 				// Padding
-							(cur_adc>>8) & 0xFF, 			// MSB
-							cur_adc & 0xFF		// LSB
+		        	uint8_t address[5] = { 		// Data address for visualizer
+		        		0x55, 					// Start of address
+						0x10 + i, 				// Selected MUX and channel
+						0x00, 					// Padding
+						(cur_adc>>8) & 0xFF, 	// MSB
+						cur_adc & 0xFF			// LSB
 		        	};
 
 					// Transmit address //
 					HAL_UART_Transmit(&hlpuart1, address, 5, HAL_MAX_DELAY);
 		        }
+
 		    }
+		// Uncomment for Arduino Plotter //
+		/* printf("\r\n"); */
 	}
 
 
@@ -719,7 +736,8 @@ void dac_write(uint16_t value) {
 
 	value = (DAC_CONFIG_BITS << 12) | value;
 	HAL_GPIO_WritePin(SPI3_CS_GPIO_Port, SPI3_CS_Pin, GPIO_PIN_RESET);
-	HAL_SPI_Transmit(&hspi3, (uint8_t *)&value, 2, HAL_MAX_DELAY);
+	// QUESTION: Should it be 1 or 2?
+	HAL_SPI_Transmit(&hspi3, (uint8_t *)&value, 1, HAL_MAX_DELAY);
 	HAL_GPIO_WritePin(SPI3_CS_GPIO_Port, SPI3_CS_Pin, GPIO_PIN_SET);
 }
 /* USER CODE END 4 */
